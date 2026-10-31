@@ -1,0 +1,7 @@
+cmake_minimum_required(VERSION 3.22.1)
+project(localstream_camera)
+add_library(localstream_camera SHARED camera.cpp)
+target_compile_features(localstream_camera PRIVATE cxx_std_17)
+target_compile_options(localstream_camera PRIVATE -Wall -Wextra -Werror=return-type)
+target_link_options(localstream_camera PRIVATE "-Wl,-z,max-page-size=16384")
+target_link_libraries(localstream_camera camera2ndk android log)

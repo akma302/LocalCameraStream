@@ -1,0 +1,14 @@
+plugins {
+    id("com.android.library")
+    id("org.jetbrains.kotlin.android")
+}
+android {
+    namespace = "dev.localstream.media"
+}
+kotlin { jvmToolchain(17) }
+dependencies {
+    implementation(project(":video:api"))
+    api("io.github.webrtc-sdk:android:150.7871.01")
+    implementation(project(":camera:api"))
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
+}
