@@ -11,6 +11,7 @@ android {
 }
 kotlin { jvmToolchain(17) }
 dependencies {
+    androidTestImplementation(project(":media"))
     androidTestImplementation("androidx.test:runner:1.6.2")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
     implementation(project(":camera:api"))

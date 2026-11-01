@@ -6,3 +6,7 @@
 local.properties
 *.iml
 artifacts/validation/*.log
+artifacts/validation/avd/
+artifacts/validation/tools/
+artifacts/validation/*-layout.json
+artifacts/validation/emulator-archive.html

@@ -59,16 +59,20 @@ class HostController(private val context: Context) {
             val rtc = RtcRuntime(context).also { runtime = it }
             val producer = CameraVideoSource(rtc, api).also { source = it }
             producer.start(config, camera)
+            android.util.Log.i("HostSession", "Camera capture ready")
             streamId = UUID.randomUUID().toString()
             val code = (100000 + SecureRandom().nextInt(900000)).toString()
             mutableState.value = HostState(phase = "Трансляция", running = true, accessCode = code)
             mutablePreview.value = producer.output
-            engine = embeddedServer(CIO, host = "0.0.0.0", port = 8765) {
+            // Own the long-lived engine in the host scope, not in start()'s withContext job.
+            engine = scope.embeddedServer(CIO, host = "0.0.0.0", port = 8765) {
                 install(WebSockets) { pingPeriod = 3.seconds; timeout = 8.seconds; maxFrameSize = 128 * 1024L }
                 routing { webSocket("/session") { handleSocket(this) } }
             }.also { it.start(wait = false) }
+            android.util.Log.i("HostSession", "Signaling engine started")
             // Wait for bind errors before advertising a working server.
-            engine!!.engine.resolvedConnectors()
+            withTimeout(10_000) { engine!!.engine.resolvedConnectors() }
+            android.util.Log.i("HostSession", "Signaling socket bound")
             advertisement = LocalDiscovery(context).advertise(serverId, "Camera-${android.os.Build.MODEL}", 8765)
             cleanup = scope.launch {
                 while (isActive) {
