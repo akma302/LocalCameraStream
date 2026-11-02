@@ -5,6 +5,7 @@ import android.os.SystemClock
 import dev.localstream.client.api.ServerEndpoint
 import dev.localstream.media.RtcPeer
 import dev.localstream.media.RtcRuntime
+import dev.localstream.network.pinSignalingServer
 import dev.localstream.network.LocalDiscovery
 import dev.localstream.network.LocalNetworkMonitor
 import dev.localstream.protocol.*
@@ -30,17 +31,24 @@ internal class AndroidViewerPlatform(private val context: Context) : ViewerPlatf
     }
     override fun networks() = LocalNetworkMonitor(context).changes().map { it.available }
     override fun createRuntime(): ViewerRuntime = AndroidViewerRuntime(RtcRuntime(context))
-    override fun createTransport(initial: ServerEndpoint): ViewerTransport = KtorViewerTransport()
+    override fun createTransport(initial: ServerEndpoint): ViewerTransport = KtorViewerTransport(initial.fingerprint)
 }
 
-internal class KtorViewerTransport : ViewerTransport {
+internal class KtorViewerTransport(fingerprint: String) : ViewerTransport {
     private val http = HttpClient(OkHttp) {
         install(WebSockets)
-        engine { config { connectTimeout(5, TimeUnit.SECONDS); pingInterval(3, TimeUnit.SECONDS); readTimeout(0, TimeUnit.MILLISECONDS) } }
+        engine { config { pinSignalingServer(fingerprint); connectTimeout(5, TimeUnit.SECONDS); pingInterval(3, TimeUnit.SECONDS); readTimeout(0, TimeUnit.MILLISECONDS) } }
     }
     override suspend fun open(endpoint: ServerEndpoint): ViewerSocket {
-        val session = http.webSocketSession {
-            url { protocol = URLProtocol.WS; host = endpoint.host; port = endpoint.port; encodedPath = "/session" }
+        val session = try {
+            http.webSocketSession {
+                url { protocol = URLProtocol.WSS; host = endpoint.host; port = endpoint.port; encodedPath = "/session" }
+            }
+        } catch (e: Exception) {
+            if (generateSequence<Throwable>(e) { it.cause }.any {
+                it is javax.net.ssl.SSLPeerUnverifiedException || it is java.security.cert.CertificateException
+            }) throw UntrustedSignalingServer(e)
+            throw e
         }
         return object : ViewerSocket {
             override val messages = flow {

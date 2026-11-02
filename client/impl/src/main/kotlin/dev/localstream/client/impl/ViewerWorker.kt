@@ -24,6 +24,7 @@ internal class ViewerWorker(
         data class Open(val epoch: Int, val socket: ViewerSocket) : Event
         data class Message(val epoch: Int, val message: Signal) : Event
         data class Closed(val epoch: Int) : Event
+        data class Untrusted(val epoch: Int) : Event
         data class Ice(val generation: String, val candidate: ViewerIce) : Event
     }
 
@@ -43,6 +44,7 @@ internal class ViewerWorker(
         var iceJob: Job? = null
         var networkAvailable = false
         var nextAttempt = 0L
+        var admissionRetryAt = 0L
         var attempt = 0
         var stage = 0
         var deadline = 0L
@@ -82,6 +84,11 @@ internal class ViewerWorker(
                 val now = platform.now()
                 when (event) {
                     Event.Stop -> break@loop
+                    is Event.Untrusted -> if (event.epoch == epoch) {
+                        terminal = true
+                        status(ViewerPhase.ERROR, "Сертификат сервера не прошёл проверку. Сверьте отпечаток на сервере.")
+                        break@loop
+                    }
                     is Event.Network -> {
                         val wasAvailable = networkAvailable
                         networkAvailable = event.available
@@ -110,7 +117,10 @@ internal class ViewerWorker(
                         val m = event.message
                         when (m.type) {
                             SignalType.ERROR -> {
-                                if (m.code == "FULL") {
+                                if (m.code == "RATE_LIMIT") {
+                                    admissionRetryAt = now + 60_000
+                                    status(ViewerPhase.RECONNECTING, m.message)
+                                } else if (m.code == "FULL") {
                                     serverFull = true
                                     status(ViewerPhase.RECONNECTING, "Сервер заполнен. Ожидаем свободное место…")
                                 } else {
@@ -164,7 +174,7 @@ internal class ViewerWorker(
                         if (current?.state == MediaState.DISCONNECTED) {
                             if (disconnectedSince == null) disconnectedSince = now
                         } else disconnectedSince = null
-                        if (socket == null && !opening && networkAvailable && now >= nextAttempt) {
+                        if (socket == null && !opening && networkAvailable && now >= maxOf(nextAttempt, admissionRetryAt)) {
                             opening = true; epoch++; val openingEpoch = epoch
                             val endpoint = servers.value.firstOrNull { it.id == resolvedServerId } ?: initial
                             socketJob?.cancel()
@@ -175,7 +185,10 @@ internal class ViewerWorker(
                                     events.send(Event.Open(openingEpoch, connected))
                                     connected.messages.collect { events.send(Event.Message(openingEpoch, it)) }
                                 } catch (e: CancellationException) { throw e }
-                                catch (e: Exception) { platform.log("WebSocket open/read failed: ${e.javaClass.simpleName}") }
+                                catch (e: Exception) {
+                                    if (e is UntrustedSignalingServer) events.send(Event.Untrusted(openingEpoch))
+                                    else platform.log("WebSocket open/read failed: ${e.javaClass.simpleName}")
+                                }
                                 finally { withContext(NonCancellable) {
                                     runCatching { withTimeout(500) { connected?.close() } }
                                     events.trySend(Event.Closed(openingEpoch))

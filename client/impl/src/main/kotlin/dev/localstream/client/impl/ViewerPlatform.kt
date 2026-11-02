@@ -47,3 +47,5 @@ internal interface ViewerPeer {
     fun addIce(ice: ViewerIce)
     fun close()
 }
+
+internal class UntrustedSignalingServer(cause: Throwable) : Exception("Server identity verification failed", cause)

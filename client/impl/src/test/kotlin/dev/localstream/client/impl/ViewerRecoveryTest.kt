@@ -14,7 +14,7 @@ import org.junit.Test
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class ViewerRecoveryTest {
-    private val endpoint = ServerEndpoint("host", "Camera", "192.168.0.2")
+    private val endpoint = ServerEndpoint("host", "Camera", "192.168.0.2", fingerprint = "AA".repeat(32))
 
     @Test fun signalingLossKeepsHealthyMediaAndResumesWithToken(): Unit = runTest {
         val platform = FakePlatform(this)
@@ -199,6 +199,36 @@ class ViewerRecoveryTest {
         } finally { session.close() }
     }
 
+    @Test fun admissionCooldownSurvivesNetworkLossAndReturn(): Unit = runTest {
+        val platform = FakePlatform(this)
+        val session = DefaultViewerSession(platform, StandardTestDispatcher(testScheduler))
+        try {
+            session.connect(endpoint, "123456"); tick()
+            platform.sockets.single().incoming.send(Signal(SignalType.ERROR, code = "RATE_LIMIT", message = "Wait"))
+            runCurrent()
+            platform.sockets.single().incoming.close(); runCurrent()
+            platform.network.value = false; runCurrent()
+            platform.network.value = true; runCurrent()
+            advanceTimeBy(59_500); runCurrent()
+            assertEquals(1, platform.opened.size)
+            tick()
+            assertEquals(2, platform.opened.size)
+        } finally { session.close() }
+    }
+
+    @Test fun identityFailureStopsRetriesAndCannotBeResumedByVisibility(): Unit = runTest {
+        val platform = FakePlatform(this).apply { rejectIdentity = true }
+        val session = DefaultViewerSession(platform, StandardTestDispatcher(testScheduler))
+        try {
+            session.connect(endpoint, "123456"); tick()
+            assertEquals(ViewerPhase.ERROR, session.state.value.phase)
+            advanceTimeBy(60_000); runCurrent()
+            session.setVisible(false); session.setVisible(true); tick()
+            assertEquals(1, platform.opened.size)
+            assertTrue(platform.runtimes.single().closed)
+        } finally { session.close() }
+    }
+
     private fun TestScope.tick() { runCurrent(); advanceTimeBy(500); runCurrent() }
 
     private class FakePlatform(private val test: TestScope) : ViewerPlatform {
@@ -209,6 +239,7 @@ class ViewerRecoveryTest {
         val runtimes = mutableListOf<FakeRuntime>()
         val transports = mutableListOf<FakeTransport>()
         val logs = mutableListOf<String>()
+        var rejectIdentity = false
         var failTransportInit = false
         var failTransportClose = false
         val peer get() = runtimes.last().peers.last()
@@ -229,6 +260,7 @@ class ViewerRecoveryTest {
         var closed = false
         override suspend fun open(endpoint: ServerEndpoint): ViewerSocket {
             platform.opened += endpoint
+            if (platform.rejectIdentity) throw UntrustedSignalingServer(IllegalStateException("Untrusted"))
             return FakeSocket().also {
                 platform.sockets += it
                 it.incoming.send(Signal(SignalType.WELCOME, generation = "g1", token = "resume-token", serverId = "host", streamId = "stream"))

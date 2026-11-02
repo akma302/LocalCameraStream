@@ -2,6 +2,7 @@ package dev.localstream.client.impl
 
 import android.content.Context
 import dev.localstream.client.api.*
+import dev.localstream.network.normalizeFingerprint
 import dev.localstream.video.api.VideoOutput
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
@@ -42,6 +43,7 @@ class DefaultViewerSession internal constructor(
     }
     override fun stopDiscovery() { discovery?.cancel(); discovery = null; mutableServers.value = emptyList() }
     override suspend fun connect(server: ServerEndpoint, accessCode: String) = lifecycle.withLock {
+        normalizeFingerprint(server.fingerprint)
         stopCurrent()
         desired = server to accessCode.trim()
         if (visible) watching = scope.launch { watch(server, accessCode.trim()) }

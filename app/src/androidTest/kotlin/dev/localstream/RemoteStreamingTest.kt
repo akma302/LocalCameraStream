@@ -40,7 +40,7 @@ class RemoteStreamingTest {
         }
         val viewer = model!!.viewer
         try {
-            viewer.connect(ServerEndpoint("physical-xiaomi", "Xiaomi", host), code)
+            viewer.connect(ServerEndpoint("physical-xiaomi", "Xiaomi", host, fingerprint = requireNotNull(args.getString("serverFingerprint"))), code)
             withTimeoutOrNull(60_000) { viewer.state.first { it.phase == ViewerPhase.PLAYING && it.frames >= 15 } }
                 ?: error("Remote video did not start: ${viewer.state.value}")
             repeat(5) {
