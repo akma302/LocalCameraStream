@@ -16,6 +16,8 @@ Validation without device launches:
   frozen frames, thermal threshold, charging/energy, recovery sample analysis,
   and stopping all six roles even when desktop CSV writes fail with disk full.
 - 7 existing TLS/server JVM tests passed.
+- Rebased onto main after PRs #1 and #2 were merged; integrated validation also
+  passed all 17 client JVM tests (26 JVM tests total).
 - App APK, instrumentation APK and lint passed (0 errors, 7 warnings).
 
 Only Xiaomi and one emulator were present in the ADB inventory. Neither was

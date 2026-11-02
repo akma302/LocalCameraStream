@@ -126,6 +126,7 @@ class FiveDeviceSoakTest {
             val started = SystemClock.elapsedRealtime()
             var lastProgress = started
             var previousFrames = viewer.state.value.frames
+            var previousSample = started
             var lowFps = 0
             var samples = 0
             var ended = false
@@ -137,7 +138,10 @@ class FiveDeviceSoakTest {
                     val now = SystemClock.elapsedRealtime()
                     val progressed = state.phase == ViewerPhase.PLAYING && state.frames != previousFrames && state.frames > 0
                     if (progressed) lastProgress = now
-                    val fps = if (progressed) state.fps else 0
+                    // Use actual monotonic sample duration, not the UI's nominal
+                    // half-second tick. A new generation resets its frame counter.
+                    val deltaFrames = if (state.frames >= previousFrames) state.frames - previousFrames else state.frames
+                    val fps = if (progressed) deltaFrames * 1000.0 / (now - previousSample) else 0.0
                     csv.row(System.currentTimeMillis(), now, state.phase, state.frames, fps, state.attempt,
                         now - lastProgress, *powerSample().toTypedArray())
                     csv.flush()
@@ -147,6 +151,7 @@ class FiveDeviceSoakTest {
                     if (fps < minimumFps) lowFps++
                     samples++
                     previousFrames = state.frames
+                    previousSample = now
                 }
             }
             assertTrue("Server must explicitly end the run", ended)
