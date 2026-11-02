@@ -54,6 +54,7 @@ class DefaultViewerSession(private val context: Context) : ViewerSession {
     }
     override fun stopDiscovery() { discovery?.cancel(); discovery = null; mutableServers.value = emptyList() }
     override suspend fun connect(server: ServerEndpoint, accessCode: String) = lifecycle.withLock {
+        normalizeFingerprint(server.fingerprint)
         stopCurrent()
         desired = server to accessCode.trim()
         if (visible) watching = scope.launch { watch(server, accessCode.trim()) }
@@ -86,6 +87,7 @@ class DefaultViewerSession(private val context: Context) : ViewerSession {
         data class Open(val epoch: Int, val socket: DefaultClientWebSocketSession) : Event
         data class Message(val epoch: Int, val message: Signal) : Event
         data class Closed(val epoch: Int) : Event
+        data class Untrusted(val epoch: Int) : Event
         data class Ice(val generation: String, val candidate: IceCandidate) : Event
     }
 
@@ -93,7 +95,7 @@ class DefaultViewerSession(private val context: Context) : ViewerSession {
         val runtime = RtcRuntime(context)
         val http = HttpClient(OkHttp) {
             install(WebSockets)
-            engine { config { connectTimeout(5, TimeUnit.SECONDS); pingInterval(3, TimeUnit.SECONDS); readTimeout(0, TimeUnit.MILLISECONDS) } }
+            engine { config { pinSignalingServer(initial.fingerprint); connectTimeout(5, TimeUnit.SECONDS); pingInterval(3, TimeUnit.SECONDS); readTimeout(0, TimeUnit.MILLISECONDS) } }
         }
         val events = Channel<Event>(256)
         requestStop = { events.trySend(Event.Stop) }
@@ -109,6 +111,7 @@ class DefaultViewerSession(private val context: Context) : ViewerSession {
         var iceJob: Job? = null
         var networkAvailable = false
         var nextAttempt = 0L
+        var admissionRetryAt = 0L
         var attempt = 0
         var stage = 0
         var deadline = 0L
@@ -146,6 +149,9 @@ class DefaultViewerSession(private val context: Context) : ViewerSession {
                 val now = SystemClock.elapsedRealtime()
                 when (event) {
                     Event.Stop -> break@loop
+                    is Event.Untrusted -> if (event.epoch == epoch) {
+                        terminal = true; status(ViewerPhase.ERROR, "Сертификат сервера не прошёл проверку. Сверьте отпечаток на сервере."); break@loop
+                    }
                     is Event.Network -> {
                         val wasAvailable = networkAvailable
                         networkAvailable = event.snapshot.available
@@ -161,7 +167,7 @@ class DefaultViewerSession(private val context: Context) : ViewerSession {
                     }
                     is Event.Closed -> if (event.epoch == epoch) {
                         socket = null; opening = false; authenticated = false; stableSince = null
-                        nextAttempt = now + RecoveryPolicy.backoffMs(attempt++, Random.nextDouble())
+                        nextAttempt = maxOf(nextAttempt, now + RecoveryPolicy.backoffMs(attempt++, Random.nextDouble()))
                         if (peer?.lastFrameAt?.let { now - it < 2_000 } != true)
                             status(ViewerPhase.RECONNECTING, if (serverFull) "Сервер заполнен. Ожидаем свободное место…" else "Восстанавливаем соединение…")
                     }
@@ -174,7 +180,10 @@ class DefaultViewerSession(private val context: Context) : ViewerSession {
                         val m = event.message
                         when (m.type) {
                             SignalType.ERROR -> {
-                                if (m.code == "FULL") {
+                                if (m.code == "RATE_LIMIT") {
+                                    admissionRetryAt = now + 60_000
+                                    status(ViewerPhase.RECONNECTING, m.message)
+                                } else if (m.code == "FULL") {
                                     serverFull = true
                                     status(ViewerPhase.RECONNECTING, "Сервер заполнен. Ожидаем свободное место…")
                                 } else {
@@ -228,7 +237,7 @@ class DefaultViewerSession(private val context: Context) : ViewerSession {
                         if (current?.state?.value == PeerConnection.PeerConnectionState.DISCONNECTED) {
                             if (disconnectedSince == null) disconnectedSince = now
                         } else disconnectedSince = null
-                        if (socket == null && !opening && networkAvailable && now >= nextAttempt) {
+                        if (socket == null && !opening && networkAvailable && now >= maxOf(nextAttempt, admissionRetryAt)) {
                             opening = true; epoch++; val openingEpoch = epoch
                             val endpoint = servers.value.firstOrNull { it.id == resolvedServerId } ?: initial
                             socketJob?.cancel()
@@ -236,7 +245,7 @@ class DefaultViewerSession(private val context: Context) : ViewerSession {
                                 var connected: DefaultClientWebSocketSession? = null
                                 try {
                                     connected = withTimeout(7_000) { http.webSocketSession {
-                                        url { protocol = URLProtocol.WS; host = endpoint.host; port = endpoint.port; encodedPath = "/session" }
+                                        url { protocol = URLProtocol.WSS; host = endpoint.host; port = endpoint.port; encodedPath = "/session" }
                                     } }
                                     events.send(Event.Open(openingEpoch, connected))
                                     for (frame in connected.incoming) if (frame is Frame.Text) {
@@ -244,7 +253,11 @@ class DefaultViewerSession(private val context: Context) : ViewerSession {
                                         events.send(Event.Message(openingEpoch, wireJson.decodeFromString<Signal>(frame.readText())))
                                     }
                                 } catch (e: CancellationException) { throw e }
-                                catch (e: Exception) { android.util.Log.w("ViewerSession", "WebSocket open/read failed: ${e.javaClass.simpleName}: ${e.message}") }
+                                catch (e: Exception) {
+                                    if (generateSequence<Throwable>(e) { it.cause }.any { it is javax.net.ssl.SSLPeerUnverifiedException || it is java.security.cert.CertificateException })
+                                        events.send(Event.Untrusted(openingEpoch))
+                                    else android.util.Log.w("ViewerSession", "WebSocket open/read failed: ${e.javaClass.simpleName}")
+                                }
                                 finally { withContext(NonCancellable) {
                                     runCatching { withTimeout(500) { connected?.close() } }
                                     events.trySend(Event.Closed(openingEpoch))

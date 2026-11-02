@@ -32,6 +32,18 @@ class StreamingIntegrationTest {
         instrumentation.waitForIdleSync()
     }
 
+    @Test fun wrongServerFingerprintRejectsBeforeJoin(): Unit = runBlocking {
+        val viewer = DefaultViewerSession(graph)
+        try {
+            graph.host.start(graph.camera("camera2"))
+            viewer.connect(ServerEndpoint("untrusted", "Untrusted", "127.0.0.1", fingerprint = "00".repeat(32)), graph.host.state.value.accessCode)
+            withTimeout(15_000) { viewer.state.first { it.phase == ViewerPhase.ERROR } }
+            assertEquals(0, graph.host.state.value.viewers)
+            delay(2_000)
+            assertEquals(ViewerPhase.ERROR, viewer.state.value.phase)
+        } finally { viewer.close(); graph.host.stop() }
+    }
+
     @Test fun camera2ProducesVideoAndWebSocketOutagePreservesMedia() = runBlocking {
         exercise("camera2", true)
     }
@@ -47,7 +59,7 @@ class StreamingIntegrationTest {
             graph.host.start(graph.camera("camera2"))
             val endpoint = withTimeout(20_000) { viewer.servers.first { it.isNotEmpty() } }.first()
             assertEquals(8765, endpoint.port)
-            viewer.connect(endpoint, graph.host.state.value.accessCode)
+            viewer.connect(endpoint.copy(fingerprint = graph.host.state.value.fingerprint), graph.host.state.value.accessCode)
             withTimeout(30_000) { viewer.state.first { it.phase == ViewerPhase.PLAYING && it.frames >= 10 } }
             viewer.setVisible(false)
             assertEquals(ViewerPhase.PAUSED, viewer.state.value.phase)
@@ -64,9 +76,9 @@ class StreamingIntegrationTest {
         val viewers = List(6) { DefaultViewerSession(graph) }
         try {
             graph.host.start(graph.camera("camera2"))
-            val endpoint = ServerEndpoint("capacity-test", "Capacity", "127.0.0.1")
+            val endpoint = ServerEndpoint("capacity-test", "Capacity", "127.0.0.1", fingerprint = graph.host.state.value.fingerprint)
             viewers.take(5).forEach { viewer ->
-                viewer.connect(endpoint, graph.host.state.value.accessCode)
+                viewer.connect(endpoint.copy(fingerprint = graph.host.state.value.fingerprint), graph.host.state.value.accessCode)
                 withTimeout(35_000) { viewer.state.first { it.phase == ViewerPhase.PLAYING && it.frames >= 3 } }
             }
             assertEquals(5, graph.host.state.value.viewers)
@@ -75,8 +87,8 @@ class StreamingIntegrationTest {
             viewers.take(5).forEachIndexed { index, viewer ->
                 assertTrue("All five viewers must continue receiving frames", viewer.state.value.frames > counts[index])
             }
-            viewers.last().connect(endpoint, graph.host.state.value.accessCode)
-            withTimeout(10_000) { viewers.last().state.first { it.message.contains("заполнен") } }
+            viewers.last().connect(endpoint.copy(fingerprint = graph.host.state.value.fingerprint), graph.host.state.value.accessCode)
+            withTimeout(10_000) { viewers.last().state.first { it.message.contains("Ð·Ð°Ð¿Ð¾Ð»Ð½ÐµÐ½") } }
             assertEquals(5, graph.host.state.value.viewers)
             viewers.first().disconnect()
             withTimeout(30_000) { viewers.last().state.first { it.phase == ViewerPhase.PLAYING && it.frames >= 3 } }
@@ -89,7 +101,7 @@ class StreamingIntegrationTest {
         val camera = PausableCamera(graph.camera("camera2"))
         try {
             graph.host.start(camera)
-            viewer.connect(ServerEndpoint("stall-test", "Stall", "127.0.0.1"), graph.host.state.value.accessCode)
+            viewer.connect(ServerEndpoint("stall-test", "Stall", "127.0.0.1", fingerprint = graph.host.state.value.fingerprint), graph.host.state.value.accessCode)
             withTimeout(30_000) { viewer.state.first { it.phase == ViewerPhase.PLAYING && it.frames >= 10 } }
             camera.pause()
             withTimeout(15_000) { viewer.state.first { it.phase == ViewerPhase.RECONNECTING } }
@@ -124,7 +136,7 @@ class StreamingIntegrationTest {
         try {
             instrumentation.targetContext.startForegroundService(Intent(instrumentation.targetContext, StreamingService::class.java).putExtra("backend", "camera2"))
             withTimeout(15_000) { graph.host.state.first { it.running } }
-            viewer.connect(ServerEndpoint("service-test", "Service", "127.0.0.1"), graph.host.state.value.accessCode)
+            viewer.connect(ServerEndpoint("service-test", "Service", "127.0.0.1", fingerprint = graph.host.state.value.fingerprint), graph.host.state.value.accessCode)
             val playing = withTimeout(30_000) { viewer.state.first { it.phase == ViewerPhase.PLAYING && it.frames >= 10 } }
             shell("input keyevent KEYCODE_HOME")
             delay(5_000)
@@ -158,7 +170,7 @@ class StreamingIntegrationTest {
         val viewer = model!!.viewer
         try {
             graph.host.start(graph.camera("camera2"))
-            viewer.connect(ServerEndpoint("rotation", "Rotation", "127.0.0.1"), graph.host.state.value.accessCode)
+            viewer.connect(ServerEndpoint("rotation", "Rotation", "127.0.0.1", fingerprint = graph.host.state.value.fingerprint), graph.host.state.value.accessCode)
             val before = withTimeout(30_000) { viewer.state.first { it.phase == ViewerPhase.PLAYING && it.frames >= 10 } }
             instrumentation.runOnMainSync { original.requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE }
             delay(3_000)
@@ -184,7 +196,7 @@ class StreamingIntegrationTest {
         }
         try {
             graph.host.start(graph.camera("camera2"))
-            viewer.connect(ServerEndpoint("test-wifi", "Wi-Fi recovery test", "127.0.0.1"), graph.host.state.value.accessCode)
+            viewer.connect(ServerEndpoint("test-wifi", "Wi-Fi recovery test", "127.0.0.1", fingerprint = graph.host.state.value.fingerprint), graph.host.state.value.accessCode)
             val before = withTimeout(30_000) { viewer.state.first { it.phase == ViewerPhase.PLAYING && it.frames >= 15 } }
             wifi(false)
             withTimeout(10_000) { viewer.state.first { it.phase == ViewerPhase.WAITING_FOR_NETWORK } }
@@ -204,7 +216,7 @@ class StreamingIntegrationTest {
             graph.host.start(graph.camera(backend))
             android.util.Log.i("DeviceTest", "Host ready $backend")
             assertTrue(graph.host.state.value.running)
-            viewer.connect(ServerEndpoint("test", "Local integration test", "127.0.0.1", proxy.port), graph.host.state.value.accessCode)
+            viewer.connect(ServerEndpoint("test", "Local integration test", "127.0.0.1", proxy.port, fingerprint = graph.host.state.value.fingerprint), graph.host.state.value.accessCode)
             val playing = withTimeoutOrNull(30_000) { viewer.state.first { it.phase == ViewerPhase.PLAYING && it.frames >= 10 } }
                 ?: error("No video: ${viewer.state.value}; host=${graph.host.state.value}")
             assertTrue(playing.frames >= 10)
@@ -216,7 +228,7 @@ class StreamingIntegrationTest {
                 assertEquals(ViewerPhase.PLAYING, viewer.state.value.phase)
                 assertTrue("Video must continue while control is unavailable", viewer.state.value.frames > playing.frames + 10)
                 proxy.allowConnections = true
-                withTimeout(20_000) { viewer.state.first { it.phase == ViewerPhase.PLAYING && !it.message.contains("управление") } }
+                withTimeout(20_000) { viewer.state.first { it.phase == ViewerPhase.PLAYING && !it.message.contains("ÑƒÐ¿Ñ€Ð°Ð²Ð»ÐµÐ½Ð¸Ðµ") } }
                 assertEquals("Resuming the same viewer must not allocate a second slot", 1, graph.host.state.value.viewers)
             }
             viewer.disconnect()

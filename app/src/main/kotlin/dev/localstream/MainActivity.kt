@@ -11,6 +11,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
@@ -117,6 +118,7 @@ private fun HostScreen(model: MainViewModel, start: () -> Unit) {
         }
         if (state.running) {
             Text("Код доступа: ${state.accessCode}", style = MaterialTheme.typography.headlineSmall)
+            SelectionContainer { Text("SHA-256 сертификата: ${state.fingerprint}") }
             Text("Зрители: ${state.viewers} / 5")
             addresses.forEach { Text("$it:${state.port}") }
             Button(onClick = { context.startService(Intent(context, StreamingService::class.java).setAction("stop")) }) { Text("Остановить трансляцию") }

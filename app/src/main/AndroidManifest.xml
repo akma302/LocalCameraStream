@@ -11,7 +11,7 @@
     <uses-feature android:name="android.hardware.camera.any" android:required="false" />
     <application android:name="dev.localstream.StreamApplication" android:label="Local Camera Stream" android:icon="@mipmap/ic_launcher" android:roundIcon="@mipmap/ic_launcher"
         android:theme="@android:style/Theme.Material.NoActionBar" android:allowBackup="false"
-        android:usesCleartextTraffic="true" android:supportsRtl="true">
+        android:usesCleartextTraffic="false" android:supportsRtl="true">
         <activity android:name="dev.localstream.MainActivity" android:exported="true">
             <intent-filter><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.LAUNCHER" /></intent-filter>
         </activity>

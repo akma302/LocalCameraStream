@@ -30,6 +30,8 @@ fun ViewerScreen(session: ViewerSession) {
     val servers by session.servers.collectAsState()
     val output by session.video.collectAsState()
     val scope = rememberCoroutineScope()
+    var fingerprint by remember { mutableStateOf("") }
+    val pinReady = fingerprint.filterNot { it.isWhitespace() || it == ':' }.matches(Regex("[0-9a-fA-F]{64}"))
     var code by remember { mutableStateOf("") }
     var host by remember { mutableStateOf("") }
     val active = state.phase !in setOf(ViewerPhase.IDLE, ViewerPhase.ERROR, ViewerPhase.ENDED)
@@ -46,10 +48,11 @@ fun ViewerScreen(session: ViewerSession) {
         }
         item { Text("Код доступа", style = MaterialTheme.typography.titleMedium) }
         item { OutlinedTextField(code, { code = it.take(6) }, label = { Text("6 цифр на экране сервера") }, singleLine = true, modifier = Modifier.fillMaxWidth(), enabled = !active) }
+        item { OutlinedTextField(fingerprint, { fingerprint = it.take(160) }, label = { Text("SHA-256 с экрана сервера") }, supportingText = { Text("Перенесите все 64 символа напрямую с сервера или по доверенному каналу.") }, modifier = Modifier.fillMaxWidth(), enabled = !active) }
         item { Text("Серверы в Wi-Fi сети", style = MaterialTheme.typography.titleMedium) }
         if (servers.isEmpty()) item { Text("Поиск трансляций… Можно подключиться по адресу ниже.", style = MaterialTheme.typography.bodyMedium) }
         items(servers, key = { it.id }) { server ->
-            OutlinedButton(onClick = { scope.launch { session.connect(server, code) } }, enabled = !active && code.length == 6, modifier = Modifier.fillMaxWidth()) {
+            OutlinedButton(onClick = { scope.launch { session.connect(server.copy(fingerprint = fingerprint), code) } }, enabled = !active && code.length == 6 && pinReady, modifier = Modifier.fillMaxWidth()) {
                 Column { Text(server.name); Text("${server.host}:${server.port}", style = MaterialTheme.typography.bodySmall) }
             }
         }
@@ -58,12 +61,12 @@ fun ViewerScreen(session: ViewerSession) {
         item {
             var validation by remember { mutableStateOf("") }
             OutlinedButton(onClick = {
-                val text = host.trim().removePrefix("http://").removePrefix("ws://").trimEnd('/')
+                val text = host.trim().removePrefix("https://").removePrefix("wss://").trimEnd('/')
                 val name = text.substringBefore(':')
                 val port = if (':' in text) text.substringAfter(':').toIntOrNull() else 8765
                 if (name.isBlank() || port == null || port !in 1..65535) validation = "Укажите адрес и корректный порт"
-                else { validation = ""; scope.launch { session.connect(ServerEndpoint("manual:$text", text, name, port), code) } }
-            }, enabled = !active && code.length == 6 && host.isNotBlank()) { Text("Подключиться") }
+                else { validation = ""; scope.launch { session.connect(ServerEndpoint("manual:$text", text, name, port, fingerprint), code) } }
+            }, enabled = !active && code.length == 6 && pinReady && host.isNotBlank()) { Text("Подключиться") }
             if (validation.isNotBlank()) Text(validation, color = MaterialTheme.colorScheme.error)
             Spacer(Modifier.height(24.dp))
         }
