@@ -7,6 +7,7 @@ android {
 }
 kotlin { jvmToolchain(17) }
 dependencies {
+    testImplementation("junit:junit:4.13.2")
     implementation(project(":video:api"))
     api("io.github.webrtc-sdk:android:150.7871.01")
     implementation(project(":camera:api"))

@@ -149,6 +149,15 @@ class RtcPeer(runtime: RtcRuntime, localTrack: VideoTrack? = null) : AutoCloseab
         if (hasRemoteDescription) connection.addIceCandidate(candidate)
         else if (pendingIce.size < 128) pendingIce.add(candidate)
     }
+    /** Caller serializes this with peer replacement/disposal. */
+    suspend fun stats(): RtcPeerStats = withTimeout(2_000) {
+        check(!disposed.get()) { "Peer is closed" }
+        suspendCancellableCoroutine { cont ->
+            connection.getStats { report ->
+                if (cont.isActive) cont.resume(outboundVideoStats(report.statsMap.values))
+            }
+        }
+    }
     override fun close() {
         if (disposed.compareAndSet(false, true)) {
             synchronized(trackLock) { output.setTrack(null); remoteTrack?.removeSink(sink); remoteTrack = null }
