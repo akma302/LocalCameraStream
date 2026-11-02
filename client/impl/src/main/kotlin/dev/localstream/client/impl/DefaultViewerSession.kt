@@ -111,6 +111,7 @@ class DefaultViewerSession(private val context: Context) : ViewerSession {
         var iceJob: Job? = null
         var networkAvailable = false
         var nextAttempt = 0L
+        var admissionRetryAt = 0L
         var attempt = 0
         var stage = 0
         var deadline = 0L
@@ -180,7 +181,7 @@ class DefaultViewerSession(private val context: Context) : ViewerSession {
                         when (m.type) {
                             SignalType.ERROR -> {
                                 if (m.code == "RATE_LIMIT") {
-                                    nextAttempt = now + 60_000
+                                    admissionRetryAt = now + 60_000
                                     status(ViewerPhase.RECONNECTING, m.message)
                                 } else if (m.code == "FULL") {
                                     serverFull = true
@@ -236,7 +237,7 @@ class DefaultViewerSession(private val context: Context) : ViewerSession {
                         if (current?.state?.value == PeerConnection.PeerConnectionState.DISCONNECTED) {
                             if (disconnectedSince == null) disconnectedSince = now
                         } else disconnectedSince = null
-                        if (socket == null && !opening && networkAvailable && now >= nextAttempt) {
+                        if (socket == null && !opening && networkAvailable && now >= maxOf(nextAttempt, admissionRetryAt)) {
                             opening = true; epoch++; val openingEpoch = epoch
                             val endpoint = servers.value.firstOrNull { it.id == resolvedServerId } ?: initial
                             socketJob?.cancel()
