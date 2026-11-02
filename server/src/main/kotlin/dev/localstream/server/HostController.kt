@@ -30,6 +30,10 @@ import kotlin.time.Duration.Companion.seconds
 data class HostState(val phase: String = "Остановлено", val running: Boolean = false, val starting: Boolean = false,
     val port: Int = 8765, val accessCode: String = "", val fingerprint: String = "", val viewers: Int = 0, val error: String? = null)
 
+data class HostPeerMetrics(val viewerId: String, val generation: String, val connection: String,
+    val bytesSent: Long?, val framesEncoded: Long?, val encodeSeconds: Double?,
+    val framesPerSecond: Double?, val qualityLimit: String)
+
 class HostController(private val context: Context) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val lifecycle = Mutex()
@@ -48,6 +52,15 @@ class HostController(private val context: Context) {
     private var streamId = ""
     private val serverId = context.getSharedPreferences("host", Context.MODE_PRIVATE).let {
         it.getString("id", null) ?: UUID.randomUUID().toString().also { id -> it.edit().putString("id", id).apply() }
+    }
+
+    /** On-demand diagnostics; never collected or sent unless explicitly requested. */
+    suspend fun diagnostics(): List<HostPeerMetrics> = peersLock.withLock {
+        peers.values.map { viewer -> viewer.commands.withLock {
+            val stats = viewer.peer.stats()
+            HostPeerMetrics(viewer.id, viewer.generation, viewer.peer.state.value.name,
+                stats.bytesSent, stats.framesEncoded, stats.encodeSeconds, stats.framesPerSecond, stats.qualityLimit)
+        } }
     }
 
     suspend fun start(api: CameraApi) = withContext(Dispatchers.IO) { lifecycle.withLock {

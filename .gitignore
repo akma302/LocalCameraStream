@@ -10,3 +10,6 @@ artifacts/validation/avd/
 artifacts/validation/tools/
 artifacts/validation/*-layout.json
 artifacts/validation/emulator-archive.html
+
+artifacts/validation/load/
+**/__pycache__/
