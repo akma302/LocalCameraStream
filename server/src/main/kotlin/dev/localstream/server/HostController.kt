@@ -8,7 +8,8 @@ import dev.localstream.network.LocalDiscovery
 import dev.localstream.protocol.*
 import dev.localstream.video.api.VideoOutput
 import io.ktor.server.application.*
-import io.ktor.server.cio.*
+import io.ktor.server.netty.*
+import dev.localstream.network.SignalingIdentity
 import io.ktor.server.engine.*
 import io.ktor.server.routing.*
 import io.ktor.server.websocket.*
@@ -27,12 +28,13 @@ import java.util.UUID
 import kotlin.time.Duration.Companion.seconds
 
 data class HostState(val phase: String = "Остановлено", val running: Boolean = false, val starting: Boolean = false,
-    val port: Int = 8765, val accessCode: String = "", val viewers: Int = 0, val error: String? = null)
+    val port: Int = 8765, val accessCode: String = "", val fingerprint: String = "", val viewers: Int = 0, val error: String? = null)
 
 class HostController(private val context: Context) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val lifecycle = Mutex()
     private val peersLock = Mutex()
+    private var joins = JoinLimiter(SystemClock::elapsedRealtime)
     private val peers = mutableMapOf<String, Viewer>()
     private val mutableState = MutableStateFlow(HostState())
     val state = mutableState.asStateFlow()
@@ -40,7 +42,7 @@ class HostController(private val context: Context) {
     val preview = mutablePreview.asStateFlow()
     private var runtime: RtcRuntime? = null
     private var source: CameraVideoSource? = null
-    private var engine: EmbeddedServer<CIOApplicationEngine, CIOApplicationEngine.Configuration>? = null
+    private var engine: EmbeddedServer<NettyApplicationEngine, NettyApplicationEngine.Configuration>? = null
     private var advertisement: AutoCloseable? = null
     private var cleanup: Job? = null
     private var streamId = ""
@@ -62,13 +64,12 @@ class HostController(private val context: Context) {
             android.util.Log.i("HostSession", "Camera capture ready")
             streamId = UUID.randomUUID().toString()
             val code = (100000 + SecureRandom().nextInt(900000)).toString()
-            mutableState.value = HostState(phase = "Трансляция", running = true, accessCode = code)
+            joins = JoinLimiter(SystemClock::elapsedRealtime)
+            val identity = SignalingIdentity()
+            mutableState.value = HostState(phase = "Трансляция", running = true, accessCode = code, fingerprint = identity.fingerprint)
             mutablePreview.value = producer.output
             // Own the long-lived engine in the host scope, not in start()'s withContext job.
-            engine = scope.embeddedServer(CIO, host = "0.0.0.0", port = 8765) {
-                install(WebSockets) { pingPeriod = 3.seconds; timeout = 8.seconds; maxFrameSize = 128 * 1024L }
-                routing { webSocket("/session") { handleSocket(this) } }
-            }.also { it.start(wait = false) }
+            engine = scope.signalingServer(identity) { handleSocket(this) }.also { it.start(wait = false) }
             android.util.Log.i("HostSession", "Signaling engine started")
             // Wait for bind errors before advertising a working server.
             withTimeout(10_000) { engine!!.engine.resolvedConnectors() }
@@ -125,6 +126,7 @@ class HostController(private val context: Context) {
             val rejection: String? = peersLock.withLock {
                 val old = peers[join.clientId]
                 when {
+                    !joins.acquire() -> "RATE_LIMIT"
                     !mutableState.value.running -> "ENDED"
                     join.streamId.isNotEmpty() && join.streamId != streamId -> "ENDED"
                     old != null && join.token != old.token -> "AUTH"
@@ -143,6 +145,7 @@ class HostController(private val context: Context) {
                 socket.send(wireJson.encodeToString(Signal(SignalType.ERROR, code = rejection, message = when (rejection) {
                     "AUTH" -> "Неверный код доступа или сессия устарела"
                     "FULL" -> "Уже подключено пять зрителей"
+                    "RATE_LIMIT" -> "Слишком много попыток входа. Повторите через минуту"
                     else -> "Трансляция завершена"
                 }))); return
             }
