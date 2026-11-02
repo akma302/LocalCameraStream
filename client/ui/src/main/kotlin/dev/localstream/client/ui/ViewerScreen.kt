@@ -17,7 +17,8 @@ import kotlinx.coroutines.launch
 
 @Composable
 fun VideoPane(output: VideoOutput?, modifier: Modifier = Modifier) {
-    Box(modifier.background(Color.Black), contentAlignment = Alignment.Center) {
+    val aspectRatio = output?.aspectRatio?.collectAsState()?.value ?: (16f / 9f)
+    Box(modifier.aspectRatio(aspectRatio).background(Color.Black), contentAlignment = Alignment.Center) {
         if (output != null) key(output) {
             AndroidView(factory = output::createView, modifier = Modifier.fillMaxSize(), onRelease = output::releaseView)
         } else Text("Нет видеопотока", color = Color.Gray)
@@ -38,7 +39,7 @@ fun ViewerScreen(session: ViewerSession) {
     LazyColumn(Modifier.fillMaxSize().padding(horizontal = 20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         item { Text("Смотреть трансляцию", style = MaterialTheme.typography.headlineSmall) }
         item {
-            VideoPane(output, Modifier.fillMaxWidth().aspectRatio(16f / 9f))
+            VideoPane(output, Modifier.fillMaxWidth())
             Text(state.message, color = if (state.phase == ViewerPhase.ERROR) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
                 modifier = Modifier.padding(top = 10.dp))
             if (state.frames > 0) Text("${state.fps} FPS · ${state.frames} кадров", style = MaterialTheme.typography.bodySmall)

@@ -290,6 +290,7 @@ class ViewerRecoveryTest {
 
     private class FakePeer : ViewerPeer {
         override val output = object : VideoOutput {
+            override val aspectRatio = MutableStateFlow(16f / 9f)
             override fun createView(context: Context): View = error("Renderer is not used by the state machine")
             override fun releaseView(view: View) {}
         }
