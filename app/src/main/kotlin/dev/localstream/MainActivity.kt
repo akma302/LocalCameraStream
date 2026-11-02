@@ -108,7 +108,7 @@ private fun HostScreen(model: MainViewModel, start: () -> Unit) {
     }.getOrDefault(emptyList()) }
     Column(Modifier.padding(horizontal = 20.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(16.dp)) {
         Text("Сервер камеры", style = MaterialTheme.typography.headlineSmall)
-        VideoPane(preview, Modifier.fillMaxWidth().aspectRatio(16f / 9f))
+        VideoPane(preview, Modifier.fillMaxWidth())
         Text(state.phase, color = MaterialTheme.colorScheme.primary)
         state.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
         Row {

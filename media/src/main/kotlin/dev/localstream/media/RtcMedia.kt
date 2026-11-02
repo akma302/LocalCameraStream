@@ -16,6 +16,7 @@ import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
 class RtcRuntime(context: Context) : AutoCloseable {
+    internal val applicationContext = context.applicationContext
     val egl: EglBase = EglBase.create()
     val factory: PeerConnectionFactory
     init {
@@ -30,6 +31,11 @@ class RtcRuntime(context: Context) : AutoCloseable {
 }
 
 class RtcVideoOutput(private val runtime: RtcRuntime) : VideoOutput {
+    private val mutableAspectRatio = MutableStateFlow(16f / 9f)
+    override val aspectRatio = mutableAspectRatio.asStateFlow()
+    internal fun onFrame(frame: VideoFrame) {
+        if (frame.rotatedWidth > 0 && frame.rotatedHeight > 0) mutableAspectRatio.value = frame.rotatedWidth.toFloat() / frame.rotatedHeight
+    }
     private var track: VideoTrack? = null
     private val views = mutableSetOf<SurfaceViewRenderer>()
     @Synchronized fun setTrack(next: VideoTrack?) {
@@ -55,6 +61,7 @@ class CameraVideoSource(private val runtime: RtcRuntime, private val api: Camera
     val track: VideoTrack = runtime.factory.createVideoTrack("camera", source)
     val output = RtcVideoOutput(runtime)
     private val helper = SurfaceTextureHelper.create("CameraTexture", runtime.egl.eglBaseContext)
+    private val rotation = DisplayRotationTracker(runtime.applicationContext, helper.handler)
     private var surface: Surface? = null
     private var capture: CameraSession? = null
     private val disposed = AtomicBoolean()
@@ -63,11 +70,15 @@ class CameraVideoSource(private val runtime: RtcRuntime, private val api: Camera
         ThreadUtils.invokeAtFrontUninterruptibly(helper.handler) { }
         val target = Surface(helper.surfaceTexture)
         surface = target
-        helper.startListening { frame ->
-            val rotated = VideoFrame(frame.buffer, info.sensorOrientation, frame.timestampNs)
-            source.capturerObserver.onFrameCaptured(rotated)
-        }
         try {
+            rotation.start()
+            helper.startListening { frame ->
+                val oriented = orientCameraFrame(frame, info, rotation.degrees)
+                try {
+                    output.onFrame(oriented)
+                    source.capturerObserver.onFrameCaptured(oriented)
+                } finally { oriented.release() }
+            }
             capture = api.startCapture(config, target)
             source.capturerObserver.onCapturerStarted(true)
             output.setTrack(track)
@@ -75,6 +86,7 @@ class CameraVideoSource(private val runtime: RtcRuntime, private val api: Camera
     }
     suspend fun close() = withContext(NonCancellable + Dispatchers.IO) {
         if (disposed.compareAndSet(false, true)) {
+            rotation.close()
             capture?.close(); helper.stopListening(); source.capturerObserver.onCapturerStopped()
             output.setTrack(null); surface?.release(); helper.dispose(); track.dispose(); source.dispose()
         }
@@ -90,7 +102,7 @@ class RtcPeer(runtime: RtcRuntime, localTrack: VideoTrack? = null) : AutoCloseab
     @Volatile var receivedFrames: Long = 0; private set
     private var remoteTrack: VideoTrack? = null
     private val trackLock = Any()
-    private val sink = VideoSink { lastFrameAt = SystemClock.elapsedRealtime(); receivedFrames++ }
+    private val sink = VideoSink { frame -> output.onFrame(frame); lastFrameAt = SystemClock.elapsedRealtime(); receivedFrames++ }
     private val disposed = AtomicBoolean()
     private var hasRemoteDescription = false
     private val pendingIce = mutableListOf<IceCandidate>()
